@@ -1,117 +1,79 @@
+from enum import Flag
 import xml.etree.ElementTree as ET
 from xml.etree import ElementTree
 import requests
 from datetime import date, datetime
 import time
-from googlesearch import search
-import csv
+import pymysql
+# local 
+import db
+import articles
+import search
 
 def main():
-    # obtengo los dato de la URL y los trabformo en XML
-    articles = requests.get('https://www.clarin.com/sitemaps/sitemap_google_news.xml')
-    root=ElementTree.fromstring(articles.content)
+    # crea una lista de articulos
+    list_article= articles.createList()
 
-    time_today=datetime.today().strftime('%Y-%m-%d')
-
-    # itera cada articulo
-    list_article= []
-    for article in root.findall('{http://www.sitemaps.org/schemas/sitemap/0.9}url'):
-        for news in article.findall('{http://www.google.com/schemas/sitemap-news/0.9}news'):
-            publication_date= news.find('{http://www.google.com/schemas/sitemap-news/0.9}publication_date').text
-
-            day_update,b = publication_date.split('T')
-            day_publication= datetime.strptime(day_update, '%Y-%m-%d').date()
+    # inicia el programa
+    PROGRAM=True
+    while PROGRAM:    
+        # bucle que se repetira hasta que se publique un nuevo articulo 
+        new_article_published = False  
+        while new_article_published == False:
             
-            # si el articulo se publico hoy se añadira a una lista de articulos los datos => publication_date y title
-            if str(day_publication) == str(time_today):
-                list_article.append(publication_date)
-                title= news.find('{http://www.google.com/schemas/sitemap-news/0.9}title').text
-                list_article.append(title)
+            # crea una nueva lista de articulos
+            new_list_article = articles.createList()
 
-    # bucle que se repetira hasta que se publique un nuevo articulo en articles
-    new_article = False  
-    while new_article == False:
-        articles = requests.get('https://www.clarin.com/sitemaps/sitemap_google_news.xml')
-        root=ElementTree.fromstring(articles.content)
+            # realiza una comparacion entre los 2 articulos para saber si se publico un nuevo articulo
+            new_article_published = articles.comparationArticles(list_article,new_list_article)
 
-         # se crea una nueva iteracion de cada articulo
-        list_article_aux=[]
-        for article in root.findall('{http://www.sitemaps.org/schemas/sitemap/0.9}url'):
-            for news in article.findall('{http://www.google.com/schemas/sitemap-news/0.9}news'):
+            # si se publico un nuevo articulo
+            if new_article_published:
+                # 
+                list_article = new_list_article.copy()
 
-                publication_date= news.find('{http://www.google.com/schemas/sitemap-news/0.9}publication_date').text
-                day_update,b = publication_date.split('T')
+                # se definen las variables de los articulos
+                article_title = new_list_article[1]
+                article_publication_date =  new_list_article[0]     
+                article_indexed= "NULL"
+                article_indexed_difference= "NULL"
 
-                # pasa el publication_date(string) a un datetime
-                hour_update,d = b.split('-')
-                dia_y_hour_update=day_update+ ' ' + hour_update
-                datetime_publication = datetime.strptime(dia_y_hour_update, '%Y-%m-%d %H:%M:%S')
-
-                # si el articulo se publico hoy se añadira a una lista lista de articulos los datos => publication_date y title
-                if str(day_update) == str(time_today):
-                    list_article_aux.append(datetime_publication)
-                    title= news.find('{http://www.google.com/schemas/sitemap-news/0.9}title').text
-                    list_article_aux.append(title)
-
-        # se compara el largo de los 2 articulos
-        # en caso de que list_article_aux sea mas largo quiere decir que se publico un nuevo articulo
-        if len(list_article) != len(list_article_aux):
-            print("New article uploaded")
-            index_google=False
-
-            # bucle que se repetira hasta que el articulo se indexe en google 
-            while index_google ==False:
-
-                # realiza una busqueda especial en google 
-                name_article= list_article_aux[1]
-                google_query = str(f"site:www.clarin.com \" {name_article} \"")
-                search_google = search(google_query, start=0,pause=2)
-
-                # comprueba si se encontraron resultados en la busqueda realizada
-                result = results_check(search_google)
-
-                # guarda en un archivo los datos publication_date y title del nuevo articulo
-                with open ('data.csv', 'w') as file:
-                    writer = csv.writer(file, delimiter=';')
-                    date=[str(list_article_aux[1]),str(list_article_aux[0])]
-                    writer.writerows(date)
-
-                # si no se encontro resultados seguira buscando
-                if result is None:
-                    print('Google indexed in process ...')
-                else:
-                    print('site indexed correctly')
-
-                    time_article_indexed = datetime.now()
-
-                    # hace una resta entre el tiempo indexado y el tiempo publicado del nuevo articulo
-                    time_article_index_google = time_article_indexed - list_article_aux[0]
+                sql = """INSERT INTO google_index_time (nota,date_pub,date_indx,diff) VALUES(""" + "'" + article_title + "','" + str(article_publication_date) + "'," + article_indexed  + "," + article_indexed_difference +  """)"""
                 
-                    # guarda en un archivo los datos time_article_indexed y time_article_index_google 
-                    with open ('data.csv', 'w') as file:
-                        writer = csv.writer(file, delimiter=';')
-                        date=[str(time_article_indexed),str(time_article_index_google)]
-                        writer.writerows(date)
+                # conecta a base de datos
+                cursor,con= db.connectDatabase()
 
-                    index_google=True
+                retorno_query = False
+                while retorno_query != True:
+                    
+                    # ejecuta la query
+                    retorno_query = db.executeQuery(cursor,con,sql)
 
-                    print(google_query)
-                    print(time_article_indexed)
-                    print(list_article_aux[0])
-                    print( time_article_index_google)
-                    return 0
+                    if retorno_query == True:
+                        indexed_google = False
+                        
+                        # bucle que se repetira hasta que el articulo se publique en Google 
+                        while indexed_google == False:
 
-                time.sleep(4) 
-        else:
-            print("Waiting for new articles ...")
-            time.sleep(15) 
+                            indexed_google = search.google(article_title)
 
+                            # si el articulo se indexo correctamente en google
+                            if indexed_google:
+                                article_indexed = datetime.now()
 
-def results_check(result):
-    try:
-        return result
-    except StopIteration:
-        return None
+                                # hace una resta entre el tiempo indexado y el tiempo publicado del nuevo articulo
+                                article_indexed_difference = article_indexed - article_publication_date
+                            
+                                # guarda en un archivo los datos time_article_indexed y time_article_index_google 
+                                sql= """UPDATE google_index_time SET date_indx = """ + "'" + str(article_publication_date) + "'," + """ diff = """ + "'" + str(article_indexed_difference) + "'" + """ WHERE nota =""" + "'" + article_title + "'"
+
+                                # conecta a base de datos
+                                cursor,con= db.connectDatabase()
+
+                                # chekea que todo se publicuque correctamente
+                                db.executeQuery(cursor,con,sql)
+
+    print("the end")
 
 if __name__ == "__main__":
     main()

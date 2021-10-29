@@ -5,3 +5,4 @@ requests==2.25.0
 xmlschema==1.8.1
 urllib3==1.26.7
 google==3.0.0
+PyMySQL==0.10.1
